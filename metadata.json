@@ -1,0 +1,5 @@
+{
+  "name": "MIZHI - AI Eye for India",
+  "description": "An assistive AI application for visually impaired users in India, featuring Street Smart and Money Sense modes with voice guidance.",
+  "requestFramePermissions": ["camera"]
+}
