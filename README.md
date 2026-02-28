@@ -69,6 +69,18 @@ VITE_OPENROUTER_API_KEY=sk-or-v1-...your_key_here...
 npm run dev
 ```
 
+## Screenshots
+
+![Screenshot1](ui.png)
+*Mizhi Home Screen featuring large, accessible mode selection buttons*
+
+![Screenshot2](mob_ui.jpeg)
+*Mizhi Home Screen Mobile View*
+
+
+
+---
+
 ## Additional Documentation
 
 ### Processing Workflows:
