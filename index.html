@@ -7,6 +7,15 @@
   </head>
   <body>
     <div id="root"></div>
+    <!-- static fallback content makes it easy to tell if React is mounting -->
+    <p id="static-debug" style="position:fixed;bottom:1rem;right:1rem;color:red;z-index:1000">
+      HTML loaded, awaiting script...
+    </p>
+    <script>
+      // inline script executes as soon as it loads
+      const staticEl = document.getElementById('static-debug');
+      if (staticEl) staticEl.textContent = 'Inline script ran';
+    </script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

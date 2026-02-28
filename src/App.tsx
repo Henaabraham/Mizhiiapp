@@ -1,16 +1,26 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { Camera, Eye, IndianRupee, ArrowLeft, Loader2, AlertCircle } from 'lucide-react';
-import { motion, AnimatePresence } from 'motion/react';
+// icons and animation libraries can occasionally throw during module load and
+// prevent the entire app from rendering, so they've been removed until the
+// basic app runs reliably.  Re-add via dynamic import if needed.
+// import { Camera, Eye, IndianRupee, ArrowLeft, Loader2, AlertCircle, Speaker, VolumeX } from 'lucide-react';
+// import { motion, AnimatePresence } from 'motion/react';
 import { analyzeScene } from './services/gemini';
+
+console.debug('App module loaded');
 
 type Mode = 'home' | 'street' | 'money';
 
 export default function App() {
+  console.debug('App render start');
   const [mode, setMode] = useState<Mode>('home');
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [lastAlert, setLastAlert] = useState('');
   const [error, setError] = useState<string | null>(null);
-  
+  const [runtimeError, setRuntimeError] = useState<string | null>(null);
+  // accessibility
+  const [speechEnabled, setSpeechEnabled] = useState(true);
+  const [speechAvailable, setSpeechAvailable] = useState(true);
+
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const analysisInterval = useRef<NodeJS.Timeout | null>(null);
@@ -18,7 +28,8 @@ export default function App() {
 
   // --- Voice & Haptics ---
   const speak = (text: string) => {
-    if (!window.speechSynthesis) return;
+    if (!speechEnabled || !window.speechSynthesis) return;
+    // cancel any existing utterance so that rapid alerts don't overlap
     window.speechSynthesis.cancel();
     const utterance = new SpeechSynthesisUtterance(text);
     utterance.rate = 1.1;
@@ -31,12 +42,45 @@ export default function App() {
     }
   };
 
+  // --- Accessibility Helpers ---
+  useEffect(() => {
+    // capture any uncaught errors so we can surface them in the UI
+    const handleError = (evt: ErrorEvent) => {
+      console.error('Global error caught', evt.error || evt.message);
+      setRuntimeError((evt.error && evt.error.toString()) || evt.message || 'Unknown error');
+    };
+    const handleRejection = (evt: PromiseRejectionEvent) => {
+      console.error('Unhandled promise rejection', evt.reason);
+      setRuntimeError(evt.reason?.toString() || 'Unhandled rejection');
+    };
+    window.addEventListener('error', handleError);
+    window.addEventListener('unhandledrejection', handleRejection);
+
+    if (!('speechSynthesis' in window)) {
+      setSpeechAvailable(false);
+    } else {
+      // trigger a short dummy call to load voices on some browsers
+      window.speechSynthesis.getVoices();
+      // speak a cadence so that user knows audio works (will silently fail if not allowed yet)
+      if (speechEnabled) speak('Speech ready');
+      // some browsers fire voiceschanged asynchronously
+      const onVoicesChanged = () => {
+        window.speechSynthesis.getVoices();
+        if (speechEnabled) speak('Speech ready');
+      };
+      window.speechSynthesis.addEventListener('voiceschanged', onVoicesChanged);
+      return () => {
+        window.speechSynthesis.removeEventListener('voiceschanged', onVoicesChanged);
+      };
+    }
+  }, [speechEnabled]);
+
   // --- Camera Logic ---
   const startCamera = async () => {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ 
+      const stream = await navigator.mediaDevices.getUserMedia({
         video: { facingMode: 'environment' },
-        audio: false 
+        audio: false
       });
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
@@ -67,7 +111,7 @@ export default function App() {
     setIsAnalyzing(true);
     const canvas = canvasRef.current;
     const video = videoRef.current;
-    
+
     // Check if video is ready
     if (video.videoWidth === 0) {
       setIsAnalyzing(false);
@@ -77,13 +121,18 @@ export default function App() {
     canvas.width = video.videoWidth;
     canvas.height = video.videoHeight;
     const ctx = canvas.getContext('2d');
-    
+
     if (ctx) {
       ctx.drawImage(video, 0, 0);
       const base64Image = canvas.toDataURL('image/jpeg', 0.6);
-      
+
       const result = await analyzeScene(base64Image, mode === 'street' ? 'street' : 'money');
-      
+      // if the service returned an error-like message we propagate it
+      if (/error/i.test(result)) {
+        setError(result);
+        console.error('AI analysis error:', result);
+      }
+
       // For Money mode, we allow repeating the same value if it's detected again 
       // after a short delay, to help users confirm they are holding the same or a new note.
       const isNewAlert = result !== lastAlert;
@@ -107,9 +156,11 @@ export default function App() {
   useEffect(() => {
     if (mode !== 'home') {
       startCamera();
-      // Run analysis every 4 seconds to avoid overwhelming the API
-      analysisInterval.current = setInterval(captureAndAnalyze, 4000);
-      speak(`${mode === 'street' ? 'Street Smart' : 'Money Sense'} mode activated.`);
+      // Run analysis every 8 seconds to stay safely under the free tier's 15 Requests Per Minute limit
+      analysisInterval.current = setInterval(captureAndAnalyze, 8000);
+      if (speechEnabled) {
+        speak(`${mode === 'street' ? 'Street Smart' : 'Money Sense'} mode activated.`);
+      }
     } else {
       stopCamera();
       if (analysisInterval.current) clearInterval(analysisInterval.current);
@@ -119,7 +170,7 @@ export default function App() {
       stopCamera();
       if (analysisInterval.current) clearInterval(analysisInterval.current);
     };
-  }, [mode, captureAndAnalyze]);
+  }, [mode, captureAndAnalyze, speechEnabled]);
 
   // --- UI Components ---
   const HomeView = () => (
@@ -134,7 +185,8 @@ export default function App() {
         onClick={() => setMode('street')}
         className="flex-1 bg-emerald-500 hover:bg-emerald-400 active:scale-95 transition-all rounded-3xl flex flex-col items-center justify-center gap-4 text-zinc-950 shadow-[0_0_40px_rgba(16,185,129,0.2)]"
       >
-        <Eye size={80} strokeWidth={2.5} />
+        {/* icon replaced with emoji fallback */}
+        <span style={{ fontSize: 80 }}>👁️</span>
         <span className="text-3xl font-bold uppercase tracking-tight">Street Smart</span>
       </button>
 
@@ -143,7 +195,7 @@ export default function App() {
         onClick={() => setMode('money')}
         className="flex-1 bg-amber-400 hover:bg-amber-300 active:scale-95 transition-all rounded-3xl flex flex-col items-center justify-center gap-4 text-zinc-950 shadow-[0_0_40px_rgba(251,191,36,0.2)]"
       >
-        <IndianRupee size={80} strokeWidth={2.5} />
+        <span style={{ fontSize: 80 }}>💰</span>
         <span className="text-3xl font-bold uppercase tracking-tight">Money Sense</span>
       </button>
     </div>
@@ -157,7 +209,7 @@ export default function App() {
         playsInline
         className="absolute inset-0 w-full h-full object-cover opacity-60"
       />
-      
+
       <canvas ref={canvasRef} className="hidden" />
 
       {/* Overlay UI */}
@@ -167,12 +219,12 @@ export default function App() {
             onClick={() => setMode('home')}
             className="p-4 bg-white/10 backdrop-blur-md rounded-full text-white border border-white/20"
           >
-            <ArrowLeft size={32} />
+            <span style={{ fontSize: 32 }}>◀️</span>
           </button>
-          
+
           <div className="px-4 py-2 bg-white/10 backdrop-blur-md rounded-full border border-white/20 flex items-center gap-2">
             {isAnalyzing ? (
-              <Loader2 className="animate-spin text-emerald-400" size={20} />
+              <span>⏳</span>
             ) : (
               <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
             )}
@@ -180,24 +232,25 @@ export default function App() {
               {isAnalyzing ? 'Analyzing' : 'Live'}
             </span>
           </div>
+          {/* speech toggle button */}
+          <button
+            onClick={() => setSpeechEnabled(prev => !prev)}
+            className="ml-4 p-2 bg-white/10 backdrop-blur-md rounded-full text-white border border-white/20"
+            title={speechEnabled ? 'Disable speech' : 'Enable speech'}
+          >
+            {speechEnabled ? <span>🔇</span> : <span>🔊</span>}
+          </button>
         </div>
 
         <div className="space-y-4">
-          <AnimatePresence mode="wait">
-            {lastAlert && (
-              <motion.div
-                key={lastAlert}
-                initial={{ opacity: 0, y: 20 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -20 }}
-                className="p-8 bg-white rounded-3xl shadow-2xl"
-              >
-                <p className="text-3xl font-bold text-zinc-900 leading-tight">
-                  {lastAlert}
-                </p>
-              </motion.div>
-            )}
-          </AnimatePresence>
+          {/* simple alert display without animation for now */}
+          {lastAlert && (
+            <div className="p-8 bg-white rounded-3xl shadow-2xl">
+              <p className="text-3xl font-bold text-zinc-900 leading-tight">
+                {lastAlert}
+              </p>
+            </div>
+          )}
 
           <div className="p-4 bg-zinc-900/80 backdrop-blur-xl rounded-2xl border border-white/10 text-center">
             <p className="text-zinc-500 text-xs uppercase font-bold tracking-widest">
@@ -210,9 +263,9 @@ export default function App() {
       {error && (
         <div className="absolute inset-0 flex items-center justify-center bg-zinc-950 p-8 text-center">
           <div className="space-y-4">
-            <AlertCircle size={64} className="mx-auto text-red-500" />
+            <span className="mx-auto text-red-500" style={{ fontSize: 64 }}>⚠️</span>
             <p className="text-xl text-white font-bold">{error}</p>
-            <button 
+            <button
               onClick={() => setMode('home')}
               className="px-8 py-3 bg-white text-black rounded-full font-bold"
             >
@@ -221,12 +274,42 @@ export default function App() {
           </div>
         </div>
       )}
+      {/* speech availability warning */}
+      {!speechAvailable && mode !== 'home' && (
+        <div className="absolute bottom-0 inset-x-0 bg-yellow-600 text-black text-center py-2">
+          <p className="text-sm font-semibold">
+            Text‑to‑speech not supported by your browser. Captions will still appear.
+          </p>
+        </div>
+      )}
     </div>
   );
 
+  // ensure audio runs whenever lastAlert updates
+  useEffect(() => {
+    if (lastAlert && speechEnabled) {
+      speak(lastAlert);
+    }
+  }, [lastAlert, speechEnabled]);
+
   return (
     <div className="h-screen w-full bg-zinc-950 text-white font-sans selection:bg-emerald-500/30">
-      {mode === 'home' ? <HomeView /> : <ActiveView />}
+      {runtimeError ? (
+        <div className="flex items-center justify-center h-full">
+          <div className="p-8 bg-red-800 rounded-lg text-white">
+            <h2 className="text-2xl font-bold mb-4">Application Error</h2>
+            <pre className="whitespace-pre-wrap">{runtimeError}</pre>
+            <button
+              onClick={() => setRuntimeError(null)}
+              className="mt-4 px-4 py-2 bg-white text-black rounded"
+            >
+              Dismiss
+            </button>
+          </div>
+        </div>
+      ) : (
+        mode === 'home' ? <HomeView /> : <ActiveView />
+      )}
     </div>
   );
 }
